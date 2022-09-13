@@ -39,6 +39,12 @@ function application(InputInterface $input, OutputInterface $output): int
 
     $git = new Git($pathToRepository);
 
+    if (!$git->isWorkingTreeClean()) {
+        $io->error('The working tree is not clean, please commit or stash your changes before running this command.');
+
+        return 1;
+    }
+
     $io->write('Fetching branches... ');
     $git->fetchAll();
     $io->writeln('<info>✔</info>');

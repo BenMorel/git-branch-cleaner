@@ -106,4 +106,21 @@ class Git
     {
         $this->repository->run('rebase', ['--abort']);
     }
+
+    public function isWorkingTreeClean(): bool
+    {
+        if ($this->workingCopy->getDiffPending()->getFiles()) {
+            return false;
+        }
+
+        if ($this->workingCopy->getDiffStaged()->getFiles()) {
+            return false;
+        }
+
+        if ($this->workingCopy->getUntrackedFiles()) {
+            return false;
+        }
+
+        return true;
+    }
 }
