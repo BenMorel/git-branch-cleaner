@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 require __DIR__ . '/vendor/autoload.php';
 
+use App\ProgressBar;
 use Gitonomy\Git\Exception\ProcessException;
 use Gitonomy\Git\Exception\ReferenceNotFoundException;
 use Gitonomy\Git\Reference\Branch;
 use Gitonomy\Git\Repository;
-use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -74,24 +74,12 @@ function application(InputInterface $input, OutputInterface $output): int
     $io->newLine();
     $io->writeln('Analyzing branches...');
 
-    $formatDefinition = ProgressBar::getFormatDefinition(ProgressBar::FORMAT_NORMAL);
-    ProgressBar::setFormatDefinition('custom', $formatDefinition . '  %message%');
-
     $localBranches = $repository->getReferences()->getLocalBranches();
     $localBranches = array_filter($localBranches, fn (Branch $branch) => !in_array($branch->getName(), $skipBranches));
 
     usort($localBranches, fn (Branch $a, Branch $b) => $a->getName() <=> $b->getName());
 
     $progressBar = new ProgressBar($io, count($localBranches));
-    $progressBar->setFormat('custom');
-    $progressBar->setMessage('');
-
-    $progressBar->setBarCharacter('<fg=green>●</>');
-    $progressBar->setEmptyBarCharacter('<fg=red>●</>');
-    $progressBar->setProgressCharacter('<fg=white>●</>');
-
-    $progressBar->maxSecondsBetweenRedraws(1 / 25);
-    $progressBar->start();
 
     $upToDateBranches = [];
 
@@ -123,7 +111,6 @@ function application(InputInterface $input, OutputInterface $output): int
         $progressBar->advance();
     }
 
-    $progressBar->setMessage('');
     $progressBar->finish();
     $io->newLine(2);
 
