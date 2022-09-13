@@ -4,11 +4,9 @@ declare(strict_types=1);
 
 require __DIR__ . '/vendor/autoload.php';
 
+use App\Git;
 use App\ProgressBar;
 use Gitonomy\Git\Exception\ProcessException;
-use Gitonomy\Git\Exception\ReferenceNotFoundException;
-use Gitonomy\Git\Reference\Branch;
-use Gitonomy\Git\Repository;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -26,7 +24,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 function application(InputInterface $input, OutputInterface $output): int
 {
-    $tmpBranchName = '__cleaner_tmp__';
+    $tmpBranch = '__cleaner_tmp__';
 
     /** @var string $pathToRepository */
     $pathToRepository = $input->getArgument('path-to-repository');
@@ -39,74 +37,60 @@ function application(InputInterface $input, OutputInterface $output): int
 
     $io = new SymfonyStyle($input, $output);
 
-    $repository = new Repository($pathToRepository);
-    $workingCopy = $repository->getWorkingCopy();
+    $git = new Git($pathToRepository);
 
     $io->write('Fetching branches... ');
-    $repository->run('fetch', ['--all']);
+    $git->fetchAll();
     $io->writeln('<info>✔</info>');
 
-    try {
-        $repository->getReferences()->getRemoteBranch($referenceBranch);
-    } catch (ReferenceNotFoundException) {
-        try {
-            $repository->getReferences()->getBranch($referenceBranch);
-        } catch (ReferenceNotFoundException) {
+    if (!$git->hasRemoteBranch($referenceBranch)) {
+        if ($git->hasLocalBranch($referenceBranch)) {
+            $io->error('Only remote reference branches are supported at the moment.');
+        } else {
             $io->error(sprintf('Invalid reference branch %s', $referenceBranch));
-            return 1;
         }
 
-        $io->error('Only remote reference branches are supported at the moment.');
         return 1;
     }
 
     $io->write('Getting reference branch head commit... ');
-    $workingCopy->checkout($referenceBranch);
-    $referenceBranchHeadCommit = $repository->getHeadCommit();
+    $git->checkout($referenceBranch);
+    $referenceBranchHeadCommitHash = $git->getHeadCommitHash();
     $io->writeln('<info>✔</info>');
 
-    // delete the temporary branch if it was not previously cleaned up
-    try {
-        $repository->run('branch', ['--delete', '--force', $tmpBranchName]);
-    } catch (ProcessException) {
-    }
+    $git->deleteBranchIfExists($tmpBranch);
 
     $io->newLine();
     $io->writeln('Analyzing branches...');
 
-    $localBranches = $repository->getReferences()->getLocalBranches();
-    $localBranches = array_filter($localBranches, fn (Branch $branch) => !in_array($branch->getName(), $skipBranches));
-
-    usort($localBranches, fn (Branch $a, Branch $b) => $a->getName() <=> $b->getName());
+    $localBranches = $git->getLocalBranches();
+    $localBranches = array_filter($localBranches, fn (string $branch) => !in_array($branch, $skipBranches));
 
     $progressBar = new ProgressBar($io, count($localBranches));
 
     $upToDateBranches = [];
 
     foreach ($localBranches as $branch) {
-        $progressBar->setMessage($branch->getName());
-        $workingCopy->checkout($branch->getName(), $tmpBranchName);
+        $progressBar->setMessage($branch);
+        $git->checkout($branch, $tmpBranch);
 
         $success = true;
 
         try {
-            $repository->run('rebase', [$referenceBranch]);
+            $git->rebase($referenceBranch);
         } catch (ProcessException) {
-            $repository->run('rebase', ['--abort']);
+            $git->abortRebase();
             $success = false;
         }
 
         if ($success) {
-            // force reload references, or getHeadCommit() below would fail
-            $repository->getReferences(true);
-
-            if ($repository->getHeadCommit()->getHash() === $referenceBranchHeadCommit->getHash()) {
+            if ($git->getHeadCommitHash() === $referenceBranchHeadCommitHash) {
                 $upToDateBranches[] = $branch;
             }
         }
 
-        $workingCopy->checkout($referenceBranch);
-        $repository->run('branch', ['--delete', '--force', $tmpBranchName]);
+        $git->checkout($referenceBranch);
+        $git->deleteBranch($tmpBranch);
 
         $progressBar->advance();
     }
@@ -122,7 +106,7 @@ function application(InputInterface $input, OutputInterface $output): int
 
     $io->writeln(sprintf('The following local branches are up-to-date with <info>%s</info>:', $referenceBranch));
     $io->newLine();
-    $io->listing(array_map(fn (Branch $branch) => $branch->getName(), $upToDateBranches));
+    $io->listing($upToDateBranches);
 
     $question = new ChoiceQuestion(
         'Do you want to delete these branches?',
@@ -141,7 +125,7 @@ function application(InputInterface $input, OutputInterface $output): int
         'Y' => $upToDateBranches,
         'A' => array_filter(
             $upToDateBranches,
-            fn (Branch $branch) => $io->confirm(sprintf('Delete branch %s?', $branch->getName()), false),
+            fn (string $branch) => $io->confirm(sprintf('Delete branch %s?', $branch), false),
         ),
     };
 
@@ -152,8 +136,8 @@ function application(InputInterface $input, OutputInterface $output): int
     }
 
     foreach ($branchesToDelete as $branch) {
-        $io->write(sprintf('Deleting branch <info>%s</info>... ', $branch->getName()));
-        $repository->run('branch', ['--delete', $branch->getName()]);
+        $io->write(sprintf('Deleting branch <info>%s</info>... ', $branch));
+        $git->deleteBranch($branch);
         $io->writeln('<info>✔</info>');
     }
 
